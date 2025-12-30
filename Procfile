@@ -1,1 +1,1 @@
-web: gunicorn web_server:app
+web: gunicorn mcp_server:app
