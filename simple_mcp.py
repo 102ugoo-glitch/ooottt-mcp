@@ -39,8 +39,7 @@ def mcp():
                         {"name": "calculate_usage", "description": "구독료 사용률 계산"},
                         {"name": "calculate_remaining", "description": 
 "본전까지 남은 콘텐츠"},
-                        {"name": "recommend_short", "description": "30분 
-이내 추천"}
+                        {"name": "recommend_short", "description": "30분 이내 추천"}
                     ]
                 }
             })

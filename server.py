@@ -1,4 +1,5 @@
 # server.py - OOOTTT 고도화 버전
+import os
 import json
 import asyncio
 import sys
@@ -7,7 +8,7 @@ from datetime import datetime, timedelta
 
 # TMDB API 키
 TMDB_API_KEY = "여기에_TMDB_API키_넣기"
-TMDB_BASE_URL = "https://api.themoviedb.org/3"
+TMDB_API_KEY = os.environ.get('TMDB_API_KEY', 'default_key')
 
 class OOOTTTServer:
     def __init__(self):
