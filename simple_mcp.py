@@ -4,43 +4,35 @@ import time
 
 app = Flask(__name__)
 
-# 1. 카카오 MCP가 처음 연결을 시도할 때 (SSE 연결)
 @app.route('/mcp', methods=['GET'])
 def mcp_sse():
     def generate():
-        # 연결 직후 카카오 서버에 '나 여기 있어'라고 알리는 필수 메시지
-        # data 부분의 uri는 실제 메시지를 주고받을 POST 엔드포인트입니다.
-        yield f"event: endpoint\ndata: {request.base_url}/message\n\n"
+        # [중요] 카카오 MCP는 연결 직후 이 형식을 반드시 기다립니다.
+        # data의 URL은 반드시 https://.../mcp/message 형태여야 합니다.
+        endpoint_url = f"{request.host_url.rstrip('/')}/mcp/message"
+        yield f"event: endpoint\ndata: {endpoint_url}\n\n"
         
         while True:
-            time.sleep(15)  # 연결 유지를 위한 하트비트
+            time.sleep(20)
             yield ": keep-alive\n\n"
 
-    return Response(generate(), mimetype='text/event-stream')
+    # 헤더에 Cache-Control과 X-Accel-Buffering을 추가하여 연결 끊김 방지
+    headers = {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'X-Accel-Buffering': 'no',
+        'Connection': 'keep-alive'
+    }
+    return Response(generate(), headers=headers)
 
-# 2. 카카오가 실제로 도구 목록(List)이나 호출(Call)을 보낼 때 (JSON-RPC)
 @app.route('/mcp/message', methods=['POST'])
 def mcp_message():
     data = request.json or {}
     method = data.get("method", "")
     request_id = data.get("id", 1)
 
-    # 도구 목록 요청 (list_tools)
-    if "tools/list" in method:
-        return jsonify({
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "result": {
-                "tools": [
-                    {"name": "calculate_usage", "description": "구독료 사용률 계산"},
-                    {"name": "calculate_remaining", "description": "본전까지 남은 콘텐츠 수 계산"},
-                    {"name": "recommend_short", "description": "30분 이내 짧은 콘텐츠 추천"}
-                ]
-            }
-        })
-
-    # 초기화 요청 (initialize)
-    elif "initialize" in method:
+    # 1. 초기화 단계
+    if "initialize" in method:
         return jsonify({
             "jsonrpc": "2.0",
             "id": request_id,
@@ -51,12 +43,26 @@ def mcp_message():
             }
         })
 
+    # 2. 도구 목록 제공 단계
+    elif "tools/list" in method:
+        return jsonify({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {
+                "tools": [
+                    {"name": "calculate_usage", "description": "구독료 사용률 계산"},
+                    {"name": "calculate_remaining", "description": "본전까지 남은 콘텐츠"},
+                    {"name": "recommend_short", "description": "30분 이내 추천"}
+                ]
+            }
+        })
+
     return jsonify({"jsonrpc": "2.0", "id": request_id, "result": {}})
 
 @app.route('/')
 def home():
-    return "<h1>OOOTTT MCP Server Running</h1>"
+    return "MCP Server Status: OK"
 
 if __name__ == '__main__':
     import os
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)))
