@@ -1,1 +1,1 @@
-web: gunicorn simple_mcp:app
+web: gunicorn kakao_mcp:app
