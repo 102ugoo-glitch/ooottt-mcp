@@ -1,6 +1,8 @@
 from flask import Flask, request, jsonify, Response
 import json
 import os
+import random
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
@@ -11,15 +13,17 @@ def add_cors_headers(response):
     return response
 
 # OTT 구독료 정보
-SUBSCRIPTION_FEES = {
-    "netflix": {"광고형": 5500, "스탠다드": 13500, "프리미엄": 17000},
-    "넷플릭스": {"광고형": 5500, "스탠다드": 13500, "프리미엄": 17000},
-    "watcha": {"베이직": 7900, "프리미엄": 12900},
-    "왓챠": {"베이직": 7900, "프리미엄": 12900},
-    "tving": {"베이직": 7900, "스탠다드": 10900, "프리미엄": 13900},
-    "티빙": {"베이직": 7900, "스탠다드": 10900, "프리미엄": 13900},
-    "wavve": {"베이직": 7900, "스탠다드": 10900, "프리미엄": 13900},
-    "웨이브": {"베이직": 7900, "스탠다드": 10900, "프리미엄": 13900}
+OTT_FEES = {
+    "넷플릭스": 13500,
+    "netflix": 13500,
+    "왓챠": 12900,
+    "watcha": 12900,
+    "티빙": 13900,
+    "tving": 13900,
+    "웨이브": 13900,
+    "wavve": 13900,
+    "디즈니": 13900,
+    "disney": 13900
 }
 
 @app.route('/mcp', methods=['GET', 'POST', 'OPTIONS'])
@@ -37,12 +41,12 @@ def mcp_endpoint():
                 "jsonrpc": "2.0",
                 "id": data.get("id", 1),
                 "result": {
-                    "protocolVersion": "2025-03-26",  # ✅ 최신 버전으로 업데이트
+                    "protocolVersion": "2025-03-26",
                     "capabilities": {"tools": {}},
                     "serverInfo": {
                         "name": "OOOTTT",
-                        "version": "5.0.0",
-                        "description": "OTT 구독료 본전 계산기"
+                        "version": "6.0.0",
+                        "description": "OTT 본전 계산 & 스마트 추천"
                     }
                 }
             }
@@ -55,38 +59,61 @@ def mcp_endpoint():
                 "result": {
                     "tools": [
                         {
-                            "name": "check_breakeven",  # ✅ 대화 예시 1번과 매칭
-                            "description": "시청 시간으로 본전 여부 확인",
+                            "name": "calculate_usage",
+                            "description": "시청 시간으로 OTT 사용률 계산",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
-                                    "platform": {"type": "string", "description": "OTT 플랫폼 (넷플릭스, 왓챠 등)"},
-                                    "hours": {"type": "number", "description": "시청한 시간"},
-                                    "plan": {"type": "string", "description": "요금제 (광고형/스탠다드/프리미엄)"}
-                                }
+                                    "platform": {"type": "string", "description": "OTT 플랫폼명"},
+                                    "hours": {"type": "number", "description": "시청 시간"}
+                                },
+                                "required": ["platform", "hours"]
                             }
                         },
                         {
-                            "name": "calculate_spent",  # ✅ 대화 예시 2번과 매칭
-                            "description": "지금까지 사용한 구독료 계산",
+                            "name": "calculate_remaining",
+                            "description": "본전까지 남은 콘텐츠 계산",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
                                     "platform": {"type": "string"},
-                                    "days_used": {"type": "number", "description": "사용한 일수"},
-                                    "plan": {"type": "string"}
+                                    "current_percent": {"type": "number", "description": "현재 사용률(%)"}
+                                },
+                                "required": ["platform", "current_percent"]
+                            }
+                        },
+                        {
+                            "name": "recommend_short",
+                            "description": "30분 이내 짧은 콘텐츠 추천",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "duration": {"type": "number", "description": "최대 시간(분)"}
                                 }
                             }
                         },
                         {
-                            "name": "remaining_content",  # ✅ 대화 예시 3번과 매칭
-                            "description": "남은 기간 동안 봐야할 콘텐츠 수",
+                            "name": "multi_ott_analysis",
+                            "description": "여러 OTT 통합 분석",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
-                                    "platform": {"type": "string"},
-                                    "days_left": {"type": "number", "description": "남은 일수"},
-                                    "current_usage_percent": {"type": "number", "description": "현재 사용률"}
+                                    "platforms": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "description": "사용중인 OTT 리스트"
+                                    }
+                                },
+                                "required": ["platforms"]
+                            }
+                        },
+                        {
+                            "name": "weekend_binge",
+                            "description": "주말 몰아보기 추천",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "available_hours": {"type": "number", "description": "시청 가능 시간"}
                                 }
                             }
                         }
@@ -99,188 +126,205 @@ def mcp_endpoint():
             tool_name = data.get("params", {}).get("name", "")
             arguments = data.get("params", {}).get("arguments", {})
             
-            # check_breakeven: "넷플릭스 20시간 봤는데 본전 찼어?"
-            if tool_name == "check_breakeven":
-                platform = arguments.get("platform", "넷플릭스").lower()
+            # calculate_usage: "넷플릭스 20시간 봤는데 본전?"
+            if tool_name == "calculate_usage":
+                platform = arguments.get("platform", "넷플릭스")
                 hours = arguments.get("hours", 0)
-                plan = arguments.get("plan", "스탠다드")
                 
-                # 플랫폼별 요금 가져오기
-                fees = SUBSCRIPTION_FEES.get(platform, SUBSCRIPTION_FEES["넷플릭스"])
-                monthly_fee = fees.get(plan, 13500)
-                
-                # 본전 계산 (월 30시간 = 100%)
+                monthly_fee = OTT_FEES.get(platform.lower(), 13500)
                 hourly_value = monthly_fee / 30
                 current_value = hours * hourly_value
                 percentage = min((current_value / monthly_fee) * 100, 100)
                 
-                if percentage >= 100:
-                    emoji = "🎉"
-                    status = "본전 달성!"
-                    message = f"축하해요! 이미 구독료 이상의 가치를 뽑았네요!"
-                elif percentage >= 80:
-                    emoji = "😊"
-                    status = "거의 본전!"
-                    message = f"조금만 더! {100-percentage:.0f}% 남았어요!"
+                emoji = "🎉" if percentage >= 100 else "👍" if percentage >= 70 else "💪"
+                
+                text = f"""## {emoji} {platform} 사용률 분석
+
+**현재 사용률: {percentage:.1f}%**
+- 시청 시간: {hours}시간
+- 현재 가치: {current_value:,.0f}원
+- 월 구독료: {monthly_fee:,}원
+
+{f'🎊 축하해요! 본전 달성!' if percentage >= 100 else f'📺 본전까지 {100-percentage:.1f}% 남았어요!'}
+
+> 💡 일일 2시간 시청 시 한달 60시간 = 200% 달성!"""
+                
+                result = {
+                    "jsonrpc": "2.0",
+                    "id": data.get("id", 1),
+                    "result": {
+                        "content": [{"type": "text", "text": text}]
+                    }
+                }
+                return add_cors_headers(jsonify(result))
+            
+            # calculate_remaining: "왓챠 50% 썼는데 본전까지 뭘 더?"
+            elif tool_name == "calculate_remaining":
+                platform = arguments.get("platform", "왓챠")
+                current = arguments.get("current_percent", 50)
+                
+                remaining = 100 - current
+                movies = remaining / 10
+                episodes = remaining / 3.3
+                
+                text = f"""## 📊 {platform} 본전 가이드
+
+**현재 {current}% 사용중!**
+
+### 본전(100%)까지:
+- 🎬 영화 {movies:.0f}편 더 보기
+- 📺 드라마 {episodes:.0f}화 더 보기
+- ⏱️ 약 {remaining/2:.0f}시간 필요
+
+### 추천 전략:
+{f'🔥 주말 몰아보기로 한번에!' if remaining > 30 else '✨ 오늘 영화 1편이면 달성!'}
+
+> 매일 1편씩만 봐도 3일이면 본전!"""
+                
+                result = {
+                    "jsonrpc": "2.0",
+                    "id": data.get("id", 1),
+                    "result": {
+                        "content": [{"type": "text", "text": text}]
+                    }
+                }
+                return add_cors_headers(jsonify(result))
+            
+            # recommend_short: "30분 이내 콘텐츠 추천"
+            elif tool_name == "recommend_short":
+                duration = arguments.get("duration", 30)
+                
+                recommendations = {
+                    15: ["러브데스로봇 (15분)", "왓이프 (20분)", "심슨가족 (22분)"],
+                    30: ["프렌즈 (22분)", "브루클린나인나인 (22분)", "오피스 (24분)"],
+                    45: ["블랙미러 (45분)", "셜록 미니 (45분)", "트루디텍티브 (40분)"]
+                }
+                
+                text = f"""## ⏱️ {duration}분 이내 추천
+
+### 추천 콘텐츠:"""
+                
+                for limit, shows in recommendations.items():
+                    if limit <= duration:
+                        text += f"\n**{limit}분 이내:**\n"
+                        for show in shows:
+                            text += f"• {show}\n"
+                
+                text += """
+### 시청 팁:
+- 점심시간 활용하기
+- 출퇴근 지하철에서
+- 잠들기 전 가볍게
+
+> 짧아도 알찬 콘텐츠들이에요!"""
+                
+                result = {
+                    "jsonrpc": "2.0",
+                    "id": data.get("id", 1),
+                    "result": {
+                        "content": [{"type": "text", "text": text}]
+                    }
+                }
+                return add_cors_headers(jsonify(result))
+            
+            # multi_ott_analysis: "넷플, 왓챠, 티빙 다 쓰는데 분석"
+            elif tool_name == "multi_ott_analysis":
+                platforms = arguments.get("platforms", ["넷플릭스", "왓챠"])
+                
+                total_cost = sum([OTT_FEES.get(p.lower(), 13000) for p in platforms])
+                
+                text = f"""## 💰 멀티 OTT 통합 분석
+
+### 구독 현황:
+"""
+                for platform in platforms:
+                    fee = OTT_FEES.get(platform.lower(), 13000)
+                    text += f"• {platform}: {fee:,}원\n"
+                
+                text += f"""
+### 총 지출: {total_cost:,}원/월
+
+### 본전 달성 조건:
+- 플랫폼당 월 10시간 = 본전
+- 총 {len(platforms) * 10}시간 시청 필요
+- 일일 {(len(platforms) * 10 / 30):.1f}시간 시청 권장
+
+### 💡 절약 팁:
+{f'• 2개로 줄이면 {total_cost - 26400:,}원 절약!' if len(platforms) > 2 else '• 친구와 계정 공유 고려'}
+{f'• 가장 적게 보는 1개 해지 추천' if len(platforms) > 2 else '• 번갈아가며 구독하기'}
+
+> 연간 {total_cost * 12:,}원 지출중!"""
+                
+                result = {
+                    "jsonrpc": "2.0",
+                    "id": data.get("id", 1),
+                    "result": {
+                        "content": [{"type": "text", "text": text}]
+                    }
+                }
+                return add_cors_headers(jsonify(result))
+            
+            # weekend_binge: "주말에 6시간 있는데 뭐 볼까"
+            elif tool_name == "weekend_binge":
+                hours = arguments.get("available_hours", 6)
+                
+                if hours <= 3:
+                    content = "영화 1편 + 드라마 2화"
+                    recommend = ["인셉션 (148분)", "파라사이트 (132분)"]
+                elif hours <= 6:
+                    content = "영화 2-3편 또는 시리즈 1개"
+                    recommend = ["오징어게임 시즌1", "킹덤 시즌1", "D.P. 시즌1"]
                 else:
-                    emoji = "💪"
-                    status = "더 봐야해요"
-                    message = f"본전까지 {100-percentage:.0f}% 더 시청하세요!"
+                    content = "시리즈 완주 가능!"
+                    recommend = ["종이의집 파트1", "스위트홈 시즌1", "지옥 전편"]
                 
-                text = f"""## {emoji} {platform.upper()} 본전 체크
+                text = f"""## 🍿 주말 {hours}시간 몰아보기 가이드
 
-### 📊 현재 상황
-- **시청 시간:** {hours}시간
-- **요금제:** {plan} ({monthly_fee:,}원)
-- **현재 가치:** {current_value:,.0f}원
-- **사용률:** {percentage:.0f}%
+### 추천 구성:
+**{content}**
 
-### 🎯 {status}
-{message}
-
-> 💡 팁: 주말 몰아보기로 본전 달성하세요!"""
+### 추천 콘텐츠:
+"""
+                for item in recommend:
+                    text += f"• {item}\n"
                 
-                result = {
-                    "jsonrpc": "2.0",
-                    "id": data.get("id", 1),
-                    "result": {
-                        "content": [{"type": "text", "text": text}]
-                    }
-                }
-                return add_cors_headers(jsonify(result))
-            
-            # calculate_spent: "나 지금까지 구독료 얼마까지 썼어?"
-            elif tool_name == "calculate_spent":
-                platform = arguments.get("platform", "넷플릭스").lower()
-                days_used = arguments.get("days_used", 15)
-                plan = arguments.get("plan", "스탠다드")
-                
-                fees = SUBSCRIPTION_FEES.get(platform, SUBSCRIPTION_FEES["넷플릭스"])
-                monthly_fee = fees.get(plan, 13500)
-                daily_fee = monthly_fee / 30
-                spent = daily_fee * days_used
-                
-                text = f"""## 💰 {platform.upper()} 구독료 사용 현황
+                text += f"""
+### 시청 전략:
+- 1시간마다 10분 휴식
+- 간식과 음료 준비
+- 핸드폰 무음 모드
 
-### 📅 사용 기간
-- **사용 일수:** {days_used}일
-- **일일 요금:** {daily_fee:,.0f}원
-- **요금제:** {plan}
+### 본전 효과:
+{hours}시간 시청 = 약 {(hours/30*100):.0f}% 사용률!
 
-### 💸 지출 금액
-- **현재까지 사용료:** {spent:,.0f}원
-- **월 구독료:** {monthly_fee:,}원
-- **남은 금액:** {monthly_fee - spent:,.0f}원
-
-### 📊 사용률
-- **{(spent/monthly_fee*100):.0f}%** 사용 완료
-- **{100-(spent/monthly_fee*100):.0f}%** 남음
-
-> 💡 일 평균 2시간씩 보면 본전!"""
+> 🎬 주말 몰아보기로 본전 달성하세요!"""
                 
                 result = {
                     "jsonrpc": "2.0",
                     "id": data.get("id", 1),
                     "result": {
                         "content": [{"type": "text", "text": text}]
-                    }
-                }
-                return add_cors_headers(jsonify(result))
-            
-            # remaining_content: "남은 결제일까지 몇 편 보면 될까?"
-            elif tool_name == "remaining_content":
-                platform = arguments.get("platform", "넷플릭스").lower()
-                days_left = arguments.get("days_left", 10)
-                current_usage = arguments.get("current_usage_percent", 60)
-                
-                remaining_percent = 100 - current_usage
-                movies_needed = remaining_percent / 10  # 영화 1편 = 10%
-                episodes_needed = remaining_percent / 3.3  # 드라마 1화 = 3.3%
-                daily_movies = movies_needed / max(days_left, 1)
-                
-                text = f"""## 📺 {platform.upper()} 본전 달성 가이드
-
-### 📅 남은 기간
-- **결제일까지:** {days_left}일
-- **현재 사용률:** {current_usage:.0f}%
-- **목표:** 100% (본전)
-
-### 🎬 본전까지 필요한 시청량
-- **영화:** {movies_needed:.0f}편
-- **또는 드라마:** {episodes_needed:.0f}화
-
-### 📋 추천 시청 계획
-- **하루에 영화** {daily_movies:.1f}편
-- **또는 드라마** {daily_movies * 3:.0f}화
-- **주말 몰아보기:** 영화 {movies_needed/2:.0f}편씩
-
-### 🎯 빠른 달성 팁
-1. 인기 시리즈 정주행
-2. 주말에 영화 마라톤
-3. 출퇴근 시간 활용
-
-> ⏰ 하루 2시간씩만 투자하면 충분해요!"""
-                
-                result = {
-                    "jsonrpc": "2.0",
-                    "id": data.get("id", 1),
-                    "result": {
-                        "content": [{"type": "text", "text": text}]
-                    }
-                }
-                return add_cors_headers(jsonify(result))
-            
-            # 알 수 없는 도구
-            else:
-                result = {
-                    "jsonrpc": "2.0",
-                    "id": data.get("id", 1),
-                    "error": {
-                        "code": -32601,
-                        "message": f"Unknown tool: {tool_name}"
                     }
                 }
                 return add_cors_headers(jsonify(result))
     
-    response = jsonify({"name": "OOOTTT", "version": "5.0.0"})
+    response = jsonify({"name": "OOOTTT", "version": "6.0.0"})
     return add_cors_headers(response)
 
 @app.route('/', methods=['GET'])
 def home():
     return """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>OOOTTT - OTT 본전 계산기</title>
-        <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; padding: 40px; background: #f5f5f5; }
-            .container { max-width: 800px; margin: 0 auto; background: white; padding: 40px; border-radius: 16px; }
-            h1 { color: #e50914; }
-            .status { color: #4CAF50; font-weight: bold; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>🎬 OOOTTT v5.0</h1>
-            <p class="status">✅ MCP 서버 정상 작동중</p>
-            <p>프로토콜 버전: 2025-03-26</p>
-            
-            <h3>지원 기능:</h3>
-            <ul>
-                <li>check_breakeven - 본전 여부 확인</li>
-                <li>calculate_spent - 사용 금액 계산</li>
-                <li>remaining_content - 남은 시청량 계산</li>
-            </ul>
-        </div>
-    </body>
-    </html>
+    <h1>🎬 OOOTTT v6.0</h1>
+    <p>✅ 모든 도구 정상 작동중</p>
+    <ul>
+        <li>calculate_usage - 사용률 계산</li>
+        <li>calculate_remaining - 남은 콘텐츠</li>
+        <li>recommend_short - 짧은 콘텐츠</li>
+        <li>multi_ott_analysis - 멀티 OTT 분석</li>
+        <li>weekend_binge - 주말 몰아보기</li>
+    </ul>
     """
-
-@app.route('/health', methods=['GET'])
-def health():
-    return jsonify({"status": "healthy", "version": "5.0.0"})
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    print(f"🚀 OOOTTT v5.0 Server on port {port}")
     app.run(host='0.0.0.0', port=port, debug=False)
